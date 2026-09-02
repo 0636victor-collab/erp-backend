@@ -79,6 +79,25 @@ app.get('/pagos/:dni', async (req, res) => {
     }
 });
 
+// Ruta para buscar datos de un responsable por su DNI (Autocompletado)
+app.get('/responsables/:dni', async (req, res) => {
+    try {
+        const { dni } = req.params;
+        const result = await pool.query(
+            'SELECT dni_responsable, nombres_responsable, celular_responsable, email_responsable, vinculo_responsable FROM alumnos WHERE dni_responsable = $1 LIMIT 1', 
+            [dni]
+        );
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Responsable no encontrado previamente." });
+        }
+        res.json(result.rows[0]);
+    } catch (err) {
+        console.error("Error al buscar responsable:", err);
+        res.status(500).json({ error: "Error en el servidor." });
+    }
+});
+
 
 // Encender el servidor
 app.listen(PORT, () => {
