@@ -67,6 +67,19 @@ app.post('/pagos', async (req, res) => {
     }
 });
 
+// Ruta para consultar los pagos realizados por DNI de alumno
+app.get('/pagos/:dni', async (req, res) => {
+    try {
+        const { dni } = req.params;
+        const result = await pool.query('SELECT * FROM transacciones_caja WHERE dni_alumno = $1', [dni]);
+        res.json(result.rows);
+    } catch (err) {
+        console.error("Error al consultar pagos:", err);
+        res.status(500).json({ error: "Error al obtener los pagos." });
+    }
+});
+
+
 // Encender el servidor
 app.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo a toda máquina en el puerto ${PORT}`);
