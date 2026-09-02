@@ -1,31 +1,48 @@
-// ==========================================
-// 1. IMPORTAR HERRAMIENTAS Y CONFIGURACIÓN
-// ==========================================
-const express = require('express');
-const cors = require('cors');
-const { Pool } = require('pg');
-require('dotenv').config();
+// 1. Ruta para buscar alumno por DNI y calcular su estado
+app.get('/alumnos/:dni', async (req, res) => {
+    try {
+        const { dni } = req.params;
+        const result = await pool.query('SELECT * FROM alumnos WHERE dni = $1', [dni]);
+        
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Alumno no encontrado en la base de datos." });
+        }
 
-// Inicializar el servidor
-const app = express();
-
-// ==========================================
-// 2. CONFIGURACIONES DE SEGURIDAD Y FORMATO
-// ==========================================
-app.use(cors());
-app.use(express.json()); // Para que el sistema entienda datos en formato JSON
-
-// ==========================================
-// 3. CONEXIÓN A LA BASE DE DATOS POSTGRESQL
-// ==========================================
-const pool = new Pool({
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    host: process.env.DB_HOST,
-    port: process.env.DB_PORT,
-    database: process.env.DB_DATABASE,
-    ssl: { rejectUnauthorized: false } // <-- ESTA LÍNEA ES LA CLAVE PARA LA NUBE
+        const alumno = result.rows.length > 0 ? result.rows[0] : null;
+        
+        // Aquí puedes conectar también la consulta de pagos reales si ya creaste la tabla de transacciones
+        res.json({
+            dni: alumno.dni,
+            nombres: alumno.nombres,
+            apellidos: alumno.apellidos,
+            grado: alumno.grado,
+            deudaTotal: "350.00" // O puedes calcularlo dinámicamente desde tu base de datos
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500.json({ error: "Error interno del servidor." }));
+    }
 });
+
+// 2. Ruta para registrar un pago de pensión
+app.post('/pagos', async (req, res) => {
+    try {
+        const { codigo_operacion, dni_alumno, nombre_alumno, total_pagado, metodo_pago, usuario_cajero } = req.body;
+        
+        const query = `
+            INSERT INTO transacciones_caja (codigo_operacion, dni_alumno, nombre_alumno, total_pagado, metodo_pago, usuario_cajero)
+            VALUES ($1, $2, $3, $4, $5, $6) RETURNING *;
+        `;
+        const values = [codigo_operacion, dni_alumno, nombre_alumno, total_pagado, metodo_pago, usuario_cajero];
+        
+        const newTransaccion = await pool.query(query, values);
+        res.json({ success: true, mensaje: "Pago registrado exitosamente en la nube", transaccion: newTransaccion.rows[0] });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Error al registrar el pago en la base de datos." });
+    }
+});
+
 
 // ==========================================
 // 4. RUTAS DEL MÓDULO DE ESTUDIANTES
