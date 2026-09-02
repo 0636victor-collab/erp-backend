@@ -51,16 +51,16 @@ app.get('/alumnos/:dni', async (req, res) => {
 // 3. Ruta para registrar pagos de pensiones en la base de datos
 app.post('/pagos', async (req, res) => {
     try {
-        const { codigo_operacion, dni_alumno, nombre_alumno, total_pagado, metodo_pago, usuario_cajero } = req.body;
+        const { codigo_operacion, dni_alumno, nombre_alumno, concepto, total_pagado, metodo_pago, usuario_cajero } = req.body;
         
         const query = `
-            INSERT INTO transacciones_caja (codigo_operacion, dni_alumno, nombre_alumno, total_pagado, metodo_pago, usuario_cajero)
-            VALUES ($1, $2, $3, $4, $5, $6) RETURNING *;
+            INSERT INTO transacciones_caja (codigo_operacion, dni_alumno, nombre_alumno, concepto, total_pagado, metodo_pago, usuario_cajero)
+            VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *;
         `;
-        const values = [codigo_operacion, dni_alumno, nombre_alumno, total_pagado, metodo_pago, usuario_cajero];
+        const values = [codigo_operacion, dni_alumno, nombre_alumno, concepto, total_pagado, metodo_pago, usuario_cajero];
         
         const newTransaccion = await pool.query(query, values);
-        res.json({ success: true, mensaje: "Pago registrado exitosamente en la nube", transaccion: newTransaccion.rows[0] });
+        res.json({ success: true, mensaje: "Pago registrado exitosamente", transaccion: newTransaccion.rows[0] });
     } catch (err) {
         console.error("Error al registrar pago:", err);
         res.status(500).json({ error: "Error al registrar el pago en la base de datos." });
