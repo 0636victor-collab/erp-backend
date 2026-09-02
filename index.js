@@ -48,7 +48,42 @@ app.get('/alumnos/:dni', async (req, res) => {
     }
 });
 
-// 3. Ruta para registrar pagos de pensiones en la base de datos
+// 3. Ruta para registrar un nuevo alumno con todos sus detalles (Ficha de Matrícula)
+app.post('/alumnos', async (req, res) => {
+    try {
+        const { 
+            dni, nombres, apellido_paterno, apellido_materno, genero, 
+            fecha_nacimiento, fecha_ingreso, grado, seccion, direccion, 
+            alergias, tipo_sangre, vinculo_responsable, dni_responsable, 
+            nombres_responsable, celular_responsable, email_responsable, foto_url 
+        } = req.body;
+
+        const query = `
+            INSERT INTO alumnos (
+                dni, nombres, apellido_paterno, apellido_materno, genero, 
+                fecha_nacimiento, fecha_ingreso, grado, seccion, direccion, 
+                alergias, tipo_sangre, vinculo_responsable, dni_responsable, 
+                nombres_responsable, celular_responsable, email_responsable, foto_url
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) 
+            RETURNING *;
+        `;
+
+        const values = [
+            dni, nombres, apellido_paterno, apellido_materno, genero, 
+            fecha_nacimiento || null, fecha_ingreso, grado, seccion, direccion, 
+            alergias, tipo_sangre, vinculo_responsable, dni_responsable, 
+            nombres_responsable, celular_responsable, email_responsable, foto_url
+        ];
+
+        const nuevoAlumno = await pool.query(query, values);
+        res.json({ success: true, mensaje: "Alumno registrado con éxito", alumno: nuevoAlumno.rows[0] });
+    } catch (err) {
+        console.error("Error al registrar alumno:", err);
+        res.status(500).json({ error: "Error al registrar el alumno en la base de datos." });
+    }
+});
+
+// 4. Ruta para registrar pagos de pensiones en la base de datos
 app.post('/pagos', async (req, res) => {
     try {
         const { codigo_operacion, dni_alumno, nombre_alumno, concepto, total_pagado, metodo_pago, usuario_cajero } = req.body;
@@ -67,7 +102,7 @@ app.post('/pagos', async (req, res) => {
     }
 });
 
-// Ruta para consultar los pagos realizados por DNI de alumno
+// 5. Ruta para consultar los pagos realizados por DNI de alumno
 app.get('/pagos/:dni', async (req, res) => {
     try {
         const { dni } = req.params;
@@ -79,7 +114,7 @@ app.get('/pagos/:dni', async (req, res) => {
     }
 });
 
-// Ruta para buscar datos de un responsable por su DNI (Autocompletado)
+// 6. Ruta para buscar datos de un responsable por su DNI (Autocompletado)
 app.get('/responsables/:dni', async (req, res) => {
     try {
         const { dni } = req.params;
@@ -97,7 +132,6 @@ app.get('/responsables/:dni', async (req, res) => {
         res.status(500).json({ error: "Error en el servidor." });
     }
 });
-
 
 // Encender el servidor
 app.listen(PORT, () => {
