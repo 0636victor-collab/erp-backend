@@ -35,17 +35,47 @@ app.get('/alumnos', async (req, res) => {
     try { const r = await pool.query('SELECT * FROM alumnos ORDER BY grado ASC, seccion ASC, apellidos ASC'); res.json({ success: true, data: r.rows }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// 👉 AQUÍ ESTÁ LA FUNCIÓN NUEVA QUE FALTABA
+// 👉 REEMPLAZA EL APP.POST('/alumnos') ANTERIOR POR ESTE:
 app.post('/alumnos', async (req, res) => {
     const b = req.body;
+    const c = await pool.connect(); // Usamos una transacción para guardar todo junto
     try {
-        const r = await pool.query(
+        await c.query('BEGIN');
+
+        // 1. Insertamos al estudiante
+        const r = await c.query(
             `INSERT INTO alumnos (dni, apellidos, nombres, grado, seccion, estado, utiles_completos, direccion, obs, papa_nombre, papa_celular, mama_nombre, mama_celular, apoderado_dni, pension_base) 
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *;`, 
-            [b.dni, b.apellidos, b.nombres, b.grado, b.seccion, b.estado || 'ACTIVO', b.utiles_completos, b.direccion || '', b.obs || '', b.papa_nombre, b.papa_celular, b.mama_nombre, b.mama_celular, b.apoderado_dni, b.pension_base]
+            [b.dni, b.apellidos, b.nombres, b.grado, b.seccion, b.estado || 'ACTIVO', b.utiles_completos, b.direccion || '', b.obs || '', b.papa_nombre, b.papa_celular, b.mama_nombre, b.mama_celular, b.apoderado_dni, b.pension_base || 300] // OJO: Si no envías pensión, asume S/300 por defecto
         );
+
+        const nuevoId = r.rows[0].id;
+        const pension = b.pension_base || 300; 
+
+        // 2. Generamos el recibo de Matrícula (Vence en Febrero)
+        await c.query(
+            `INSERT INTO pensiones (alumno_id, concepto, monto, fecha_vencimiento, estado) VALUES ($1, $2, $3, $4, 'PENDIENTE')`, 
+            [nuevoId, 'Matrícula 2026', pension, '2026-02-28']
+        );
+
+        // 3. Generamos las 10 mensualidades (Marzo a Diciembre, vencen los días 5)
+        const meses = ['Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+        for (let i = 0; i < meses.length; i++) {
+            let mesNum = (i + 3).toString().padStart(2, '0'); // Convierte Marzo en '03', Abril en '04', etc.
+            await c.query(
+                `INSERT INTO pensiones (alumno_id, concepto, monto, fecha_vencimiento, estado) VALUES ($1, $2, $3, $4, 'PENDIENTE')`, 
+                [nuevoId, `Pensión ${meses[i]} 2026`, pension, `2026-${mesNum}-05`]
+            );
+        }
+
+        await c.query('COMMIT'); // Guardamos todo en la base de datos
         res.json({ success: true, data: r.rows[0] });
-    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    } catch (e) { 
+        await c.query('ROLLBACK'); // Si algo falla, cancelamos todo para no crear alumnos a medias
+        res.status(500).json({ success: false, error: e.message }); 
+    } finally {
+        c.release();
+    }
 });
 
 app.put('/alumnos/:id', async (req, res) => {
