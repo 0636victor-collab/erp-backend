@@ -327,27 +327,23 @@ app.put('/usuarios/:id', async (req, res) => {
 app.get('/caja-diaria/resumen', async (req, res) => {
     const { desde, hasta } = req.query;
     try {
-        // 🔥 CORRECCIÓN ZONA HORARIA PERÚ (-05:00) 🔥
-        // Agregamos la zona horaria para que el servidor Node (que está en UTC) entienda
-        // que queremos buscar desde las 00:00 hasta las 23:59 hora local de Perú.
-        const fInicioVentas = desde + ' 00:00:00-05';
-        const fFinVentas = hasta + ' 23:59:59-05';
-        
+        // 🔥 MAGIA DE ZONA HORARIA: Restamos 5 horas a la base de datos (UTC)
+        // para que empate exactito con la hora de Perú, evitando que ventas de noche
+        // salten al día siguiente en el reporte.
         const [pensiones, ventas, egresos, detPensiones, detVentas, detEgresos] = await Promise.all([
-            // Las pensiones usan tipo DATE, no necesitan zona horaria
+            
             pool.query(`SELECT COALESCE(SUM(monto), 0) as total FROM pensiones WHERE estado='PAGADO' AND fecha_pago >= $1 AND fecha_pago <= $2`, [desde, hasta]),
             
-            // Las ventas usan TIMESTAMP, aquí SÍ inyectamos la variable con zona horaria
-            pool.query(`SELECT COALESCE(SUM(total), 0) as total FROM ventas WHERE fecha_venta >= $1 AND fecha_venta <= $2`, [fInicioVentas, fFinVentas]),
+            // Ajuste -5 Horas para sumatorias de Tienda
+            pool.query(`SELECT COALESCE(SUM(total), 0) as total FROM ventas WHERE (fecha_venta - INTERVAL '5 hours')::date >= $1 AND (fecha_venta - INTERVAL '5 hours')::date <= $2`, [desde, hasta]),
             
-            // Egresos usa DATE
             pool.query(`SELECT COALESCE(SUM(monto), 0) as total FROM egresos WHERE fecha >= $1 AND fecha <= $2`, [desde, hasta]),
             
             // Consultas Detalladas
             pool.query(`SELECT p.id, p.monto, p.concepto, p.fecha_pago, a.nombres, a.apellidos FROM pensiones p JOIN alumnos a ON p.alumno_id = a.id WHERE p.estado='PAGADO' AND p.fecha_pago >= $1 AND p.fecha_pago <= $2 ORDER BY p.fecha_pago DESC`, [desde, hasta]),
             
-            // Detalle de ventas con zona horaria
-            pool.query(`SELECT id, total, fecha_venta, comprador_nombre FROM ventas WHERE fecha_venta >= $1 AND fecha_venta <= $2 ORDER BY fecha_venta DESC`, [fInicioVentas, fFinVentas]),
+            // Ajuste -5 Horas para lista detallada de Tienda
+            pool.query(`SELECT id, total, fecha_venta, comprador_nombre FROM ventas WHERE (fecha_venta - INTERVAL '5 hours')::date >= $1 AND (fecha_venta - INTERVAL '5 hours')::date <= $2 ORDER BY fecha_venta DESC`, [desde, hasta]),
             
             pool.query(`SELECT id, monto, concepto, fecha, registrado_por FROM egresos WHERE fecha >= $1 AND fecha <= $2 ORDER BY fecha DESC`, [desde, hasta])
         ]);
