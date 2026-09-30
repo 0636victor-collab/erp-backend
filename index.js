@@ -7,7 +7,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // Aumentado para soportar la imagen de la firma digital
 
 const pool = new Pool({
     user: process.env.DB_USER, 
@@ -18,7 +18,7 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
-// Prueba de conexión "Blindada" para que no se apague la consola
+// Prueba de conexión
 pool.connect((err, client, release) => {
     if (err) {
         console.error('❌ Error conectando a Supabase. Revisa tu archivo .env:', err.message);
@@ -35,7 +35,6 @@ app.get('/alumnos', async (req, res) => {
     try { const r = await pool.query('SELECT * FROM alumnos ORDER BY grado ASC, seccion ASC, apellidos ASC'); res.json({ success: true, data: r.rows }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// 👉 AQUÍ ESTÁ LA FUNCIÓN NUEVA QUE FALTABA
 app.post('/alumnos', async (req, res) => {
     const b = req.body;
     try {
@@ -118,7 +117,7 @@ app.put('/ventas/cambio', async (req, res) => {
 });
 
 // ==========================================
-// 4. RRHH Y GASTOS (CON LEYES ONP/AFP)
+// 4. RRHH Y GASTOS 
 // ==========================================
 app.get('/personal', async (req, res) => { try { const r = await pool.query("SELECT * FROM personal ORDER BY estado ASC, apellidos ASC"); res.json({ success: true, data: r.rows }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } });
 
@@ -200,19 +199,20 @@ app.put('/usuarios/:id', async (req, res) => {
 // ==========================================
 // 6. CAJA DIARIA Y CIERRES (DASHBOARD)
 // ==========================================
-
-// A) Obtener resumen de caja por rango de fechas (Ingresos - Egresos) CON DETALLES
 app.get('/caja-diaria/resumen', async (req, res) => {
     const { desde, hasta } = req.query;
     try {
+        // Truco SQL: Añadimos ' 23:59:59' al "hasta" para que incluya todas las ventas de la tienda sin importar la hora.
+        const fechaFinFiltro = hasta + ' 23:59:59';
+        
         const [pensiones, ventas, egresos, detPensiones, detVentas, detEgresos] = await Promise.all([
             pool.query(`SELECT COALESCE(SUM(monto), 0) as total FROM pensiones WHERE estado='PAGADO' AND fecha_pago >= $1 AND fecha_pago <= $2`, [desde, hasta]),
-            pool.query(`SELECT COALESCE(SUM(total), 0) as total FROM ventas WHERE DATE(fecha_venta) >= $1 AND DATE(fecha_venta) <= $2`, [desde, hasta]),
+            pool.query(`SELECT COALESCE(SUM(total), 0) as total FROM ventas WHERE fecha_venta >= $1 AND fecha_venta <= $2`, [desde, fechaFinFiltro]),
             pool.query(`SELECT COALESCE(SUM(monto), 0) as total FROM egresos WHERE fecha >= $1 AND fecha <= $2`, [desde, hasta]),
             
             // Consultas detalladas para el desplegable
             pool.query(`SELECT p.id, p.monto, p.concepto, p.fecha_pago, a.nombres, a.apellidos FROM pensiones p JOIN alumnos a ON p.alumno_id = a.id WHERE p.estado='PAGADO' AND p.fecha_pago >= $1 AND p.fecha_pago <= $2 ORDER BY p.fecha_pago DESC`, [desde, hasta]),
-            pool.query(`SELECT id, total, fecha_venta, comprador_nombre FROM ventas WHERE DATE(fecha_venta) >= $1 AND DATE(fecha_venta) <= $2 ORDER BY fecha_venta DESC`, [desde, hasta]),
+            pool.query(`SELECT id, total, fecha_venta, comprador_nombre FROM ventas WHERE fecha_venta >= $1 AND fecha_venta <= $2 ORDER BY fecha_venta DESC`, [desde, fechaFinFiltro]),
             pool.query(`SELECT id, monto, concepto, fecha, registrado_por FROM egresos WHERE fecha >= $1 AND fecha <= $2 ORDER BY fecha DESC`, [desde, hasta])
         ]);
         
@@ -228,15 +228,14 @@ app.get('/caja-diaria/resumen', async (req, res) => {
                 total_ingresos: totalIngresos, 
                 total_egresos: totalEgresos, 
                 saldo_efectivo: saldo,
-                lista_pensiones: detPensiones.rows, // Pasamos la lista
-                lista_ventas: detVentas.rows,       // Pasamos la lista
-                lista_egresos: detEgresos.rows      // Pasamos la lista
+                lista_pensiones: detPensiones.rows, 
+                lista_ventas: detVentas.rows,       
+                lista_egresos: detEgresos.rows      
             }
         });
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// B) Registrar un nuevo Egreso en la caja diaria
 app.post('/egresos', async (req, res) => {
     const b = req.body;
     try {
@@ -245,7 +244,6 @@ app.post('/egresos', async (req, res) => {
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// C) Ver la lista de Egresos por rango de fechas
 app.get('/egresos', async (req, res) => {
     const { desde, hasta } = req.query;
     try {
@@ -254,7 +252,6 @@ app.get('/egresos', async (req, res) => {
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// D) Guardar el Cierre de Caja definitivo con FIRMA DIGITAL
 app.post('/cierres-caja', async (req, res) => {
     const b = req.body;
     try {
@@ -263,7 +260,6 @@ app.post('/cierres-caja', async (req, res) => {
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// E) Ver el historial de todos los Cierres de Caja para Auditoría
 app.get('/cierres-caja', async (req, res) => {
     try {
         const r = await pool.query(`SELECT * FROM cierres_caja ORDER BY fecha_cierre DESC`);
