@@ -35,47 +35,17 @@ app.get('/alumnos', async (req, res) => {
     try { const r = await pool.query('SELECT * FROM alumnos ORDER BY grado ASC, seccion ASC, apellidos ASC'); res.json({ success: true, data: r.rows }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// 👉 REEMPLAZA EL APP.POST('/alumnos') ANTERIOR POR ESTE:
+// 👉 AQUÍ ESTÁ LA FUNCIÓN NUEVA QUE FALTABA
 app.post('/alumnos', async (req, res) => {
     const b = req.body;
-    const c = await pool.connect(); // Usamos una transacción para guardar todo junto
     try {
-        await c.query('BEGIN');
-
-        // 1. Insertamos al estudiante
-        const r = await c.query(
+        const r = await pool.query(
             `INSERT INTO alumnos (dni, apellidos, nombres, grado, seccion, estado, utiles_completos, direccion, obs, papa_nombre, papa_celular, mama_nombre, mama_celular, apoderado_dni, pension_base) 
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING *;`, 
-            [b.dni, b.apellidos, b.nombres, b.grado, b.seccion, b.estado || 'ACTIVO', b.utiles_completos, b.direccion || '', b.obs || '', b.papa_nombre, b.papa_celular, b.mama_nombre, b.mama_celular, b.apoderado_dni, b.pension_base || 300] // OJO: Si no envías pensión, asume S/300 por defecto
+            [b.dni, b.apellidos, b.nombres, b.grado, b.seccion, b.estado || 'ACTIVO', b.utiles_completos, b.direccion || '', b.obs || '', b.papa_nombre, b.papa_celular, b.mama_nombre, b.mama_celular, b.apoderado_dni, b.pension_base]
         );
-
-        const nuevoId = r.rows[0].id;
-        const pension = b.pension_base || 300; 
-
-        // 2. Generamos el recibo de Matrícula (Vence en Febrero)
-        await c.query(
-            `INSERT INTO pensiones (alumno_id, concepto, monto, fecha_vencimiento, estado) VALUES ($1, $2, $3, $4, 'PENDIENTE')`, 
-            [nuevoId, 'Matrícula 2026', pension, '2026-02-28']
-        );
-
-        // 3. Generamos las 10 mensualidades (Marzo a Diciembre, vencen los días 5)
-        const meses = ['Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
-        for (let i = 0; i < meses.length; i++) {
-            let mesNum = (i + 3).toString().padStart(2, '0'); // Convierte Marzo en '03', Abril en '04', etc.
-            await c.query(
-                `INSERT INTO pensiones (alumno_id, concepto, monto, fecha_vencimiento, estado) VALUES ($1, $2, $3, $4, 'PENDIENTE')`, 
-                [nuevoId, `Pensión ${meses[i]} 2026`, pension, `2026-${mesNum}-05`]
-            );
-        }
-
-        await c.query('COMMIT'); // Guardamos todo en la base de datos
         res.json({ success: true, data: r.rows[0] });
-    } catch (e) { 
-        await c.query('ROLLBACK'); // Si algo falla, cancelamos todo para no crear alumnos a medias
-        res.status(500).json({ success: false, error: e.message }); 
-    } finally {
-        c.release();
-    }
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.put('/alumnos/:id', async (req, res) => {
@@ -224,6 +194,72 @@ app.put('/usuarios/:id', async (req, res) => {
         }
         const r = await pool.query(query, params); 
         res.json({ success: true, data: r.rows[0] }); 
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ==========================================
+// 6. CAJA DIARIA Y CIERRES (DASHBOARD)
+// ==========================================
+
+// A) Obtener resumen de caja por rango de fechas (Ingresos - Egresos)
+app.get('/caja-diaria/resumen', async (req, res) => {
+    const { desde, hasta } = req.query;
+    try {
+        const [pensiones, ventas, egresos] = await Promise.all([
+            pool.query(`SELECT COALESCE(SUM(monto), 0) as total FROM pensiones WHERE estado='PAGADO' AND fecha_pago >= $1 AND fecha_pago <= $2`, [desde, hasta]),
+            pool.query(`SELECT COALESCE(SUM(total), 0) as total FROM ventas WHERE DATE(fecha_venta) >= $1 AND DATE(fecha_venta) <= $2`, [desde, hasta]),
+            pool.query(`SELECT COALESCE(SUM(monto), 0) as total FROM egresos WHERE fecha >= $1 AND fecha <= $2`, [desde, hasta])
+        ]);
+        
+        const totalIngresos = parseFloat(pensiones.rows[0].total) + parseFloat(ventas.rows[0].total);
+        const totalEgresos = parseFloat(egresos.rows[0].total);
+        const saldo = totalIngresos - totalEgresos;
+
+        res.json({ 
+            success: true, 
+            data: { 
+                ingresos_pensiones: parseFloat(pensiones.rows[0].total), 
+                ingresos_tienda: parseFloat(ventas.rows[0].total), 
+                total_ingresos: totalIngresos, 
+                total_egresos: totalEgresos, 
+                saldo_efectivo: saldo 
+            }
+        });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// B) Registrar un nuevo Egreso en la caja diaria
+app.post('/egresos', async (req, res) => {
+    const b = req.body;
+    try {
+        const r = await pool.query(`INSERT INTO egresos (concepto, monto, fecha, comprobante, registrado_por) VALUES ($1, $2, $3, $4, $5) RETURNING *`, [b.concepto, b.monto, b.fecha, b.comprobante, b.registrado_por]);
+        res.json({ success: true, data: r.rows[0] });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// C) Ver la lista de Egresos por rango de fechas
+app.get('/egresos', async (req, res) => {
+    const { desde, hasta } = req.query;
+    try {
+        const r = await pool.query(`SELECT * FROM egresos WHERE fecha >= $1 AND fecha <= $2 ORDER BY fecha DESC, id DESC`, [desde, hasta]);
+        res.json({ success: true, data: r.rows });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// D) Guardar el Cierre de Caja definitivo con FIRMA DIGITAL
+app.post('/cierres-caja', async (req, res) => {
+    const b = req.body;
+    try {
+        const r = await pool.query(`INSERT INTO cierres_caja (fecha_inicio, fecha_fin, total_ingresos, total_egresos, saldo_efectivo, entregado_a, firma_digital) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`, [b.fecha_inicio, b.fecha_fin, b.total_ingresos, b.total_egresos, b.saldo_efectivo, b.entregado_a, b.firma_digital]);
+        res.json({ success: true, data: r.rows[0] });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// E) Ver el historial de todos los Cierres de Caja para Auditoría
+app.get('/cierres-caja', async (req, res) => {
+    try {
+        const r = await pool.query(`SELECT * FROM cierres_caja ORDER BY fecha_cierre DESC`);
+        res.json({ success: true, data: r.rows });
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
