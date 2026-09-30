@@ -201,14 +201,19 @@ app.put('/usuarios/:id', async (req, res) => {
 // 6. CAJA DIARIA Y CIERRES (DASHBOARD)
 // ==========================================
 
-// A) Obtener resumen de caja por rango de fechas (Ingresos - Egresos)
+// A) Obtener resumen de caja por rango de fechas (Ingresos - Egresos) CON DETALLES
 app.get('/caja-diaria/resumen', async (req, res) => {
     const { desde, hasta } = req.query;
     try {
-        const [pensiones, ventas, egresos] = await Promise.all([
+        const [pensiones, ventas, egresos, detPensiones, detVentas, detEgresos] = await Promise.all([
             pool.query(`SELECT COALESCE(SUM(monto), 0) as total FROM pensiones WHERE estado='PAGADO' AND fecha_pago >= $1 AND fecha_pago <= $2`, [desde, hasta]),
             pool.query(`SELECT COALESCE(SUM(total), 0) as total FROM ventas WHERE DATE(fecha_venta) >= $1 AND DATE(fecha_venta) <= $2`, [desde, hasta]),
-            pool.query(`SELECT COALESCE(SUM(monto), 0) as total FROM egresos WHERE fecha >= $1 AND fecha <= $2`, [desde, hasta])
+            pool.query(`SELECT COALESCE(SUM(monto), 0) as total FROM egresos WHERE fecha >= $1 AND fecha <= $2`, [desde, hasta]),
+            
+            // Consultas detalladas para el desplegable
+            pool.query(`SELECT p.id, p.monto, p.concepto, p.fecha_pago, a.nombres, a.apellidos FROM pensiones p JOIN alumnos a ON p.alumno_id = a.id WHERE p.estado='PAGADO' AND p.fecha_pago >= $1 AND p.fecha_pago <= $2 ORDER BY p.fecha_pago DESC`, [desde, hasta]),
+            pool.query(`SELECT id, total, fecha_venta, comprador_nombre FROM ventas WHERE DATE(fecha_venta) >= $1 AND DATE(fecha_venta) <= $2 ORDER BY fecha_venta DESC`, [desde, hasta]),
+            pool.query(`SELECT id, monto, concepto, fecha, registrado_por FROM egresos WHERE fecha >= $1 AND fecha <= $2 ORDER BY fecha DESC`, [desde, hasta])
         ]);
         
         const totalIngresos = parseFloat(pensiones.rows[0].total) + parseFloat(ventas.rows[0].total);
@@ -222,7 +227,10 @@ app.get('/caja-diaria/resumen', async (req, res) => {
                 ingresos_tienda: parseFloat(ventas.rows[0].total), 
                 total_ingresos: totalIngresos, 
                 total_egresos: totalEgresos, 
-                saldo_efectivo: saldo 
+                saldo_efectivo: saldo,
+                lista_pensiones: detPensiones.rows, // Pasamos la lista
+                lista_ventas: detVentas.rows,       // Pasamos la lista
+                lista_egresos: detEgresos.rows      // Pasamos la lista
             }
         });
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
