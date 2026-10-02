@@ -1,7 +1,15 @@
 const express = require('express');
 const cors = require('cors');
-const { Pool } = require('pg');
+const { Pool, types } = require('pg'); // <-- Importamos 'types' para blindar las fechas
 require('dotenv').config();
+
+// 🛡️ BLINDAJE GLOBAL DE ZONA HORARIA (PERÚ) 🛡️
+process.env.TZ = 'America/Lima'; 
+
+// OID 1082 es para los campos DATE en Postgres (como las pensiones).
+// Esto le dice a Node: "No traduzcas las fechas, devuélvelas como texto exacto (YYYY-MM-DD)".
+// Esto soluciona de raíz que te reste un día.
+types.setTypeParser(1082, (val) => val);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -18,13 +26,14 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
+// Cada vez que el servidor se conecte, obliga a la base de datos a usar la hora peruana
+pool.on('connect', client => {
+    client.query("SET timezone = 'America/Lima';");
+});
+
 pool.connect((err, client, release) => {
-    if (err) {
-        console.error('❌ Error conectando a Supabase:', err.message);
-    } else {
-        console.log('✅ Base de datos Supabase conectada con éxito.');
-        release();
-    }
+    if (err) console.error('❌ Error conectando a Supabase:', err.message);
+    else { console.log('✅ Base de datos Supabase (America/Lima) conectada.'); release(); }
 });
 
 // ==========================================
@@ -34,9 +43,7 @@ app.get('/alumnos', async (req, res) => {
     try { 
         const r = await pool.query('SELECT * FROM alumnos ORDER BY grado ASC, seccion ASC, apellidos ASC'); 
         res.json({ success: true, data: r.rows }); 
-    } catch (e) { 
-        res.status(500).json({ success: false, error: e.message }); 
-    }
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.post('/alumnos', async (req, res) => {
@@ -48,22 +55,16 @@ app.post('/alumnos', async (req, res) => {
             [b.dni, b.apellidos, b.nombres, b.grado, b.seccion, b.estado || 'ACTIVO', b.utiles_completos, b.direccion || '', b.obs || '', b.papa_nombre, b.papa_celular, b.mama_nombre, b.mama_celular, b.apoderado_dni, b.pension_base]
         );
         res.json({ success: true, data: r.rows[0] });
-    } catch (e) { 
-        res.status(500).json({ success: false, error: e.message }); 
-    }
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.put('/alumnos/:id', async (req, res) => {
     const { id } = req.params; const b = req.body;
     try {
         const r = await pool.query(`UPDATE alumnos SET dni=$1, apellidos=$2, nombres=$3, grado=$4, seccion=$5, estado=$6, utiles_completos=$7, direccion=$8, obs=$9, papa_nombre=$10, papa_celular=$11, mama_nombre=$12, mama_celular=$13, apoderado_dni=$14, pension_base=$15 WHERE id=$16 RETURNING *;`, [b.dni, b.apellidos, b.nombres, b.grado, b.seccion, b.estado, b.utiles_completos, b.direccion, b.obs, b.papa_nombre, b.papa_celular, b.mama_nombre, b.mama_celular, b.apoderado_dni, b.pension_base, id]);
-        if (b.pension_base) {
-            await pool.query(`UPDATE pensiones SET monto=$1 WHERE alumno_id=$2 AND estado='PENDIENTE' AND concepto NOT ILIKE '%MATRÍCULA%'`, [b.pension_base, id]);
-        }
+        if (b.pension_base) await pool.query(`UPDATE pensiones SET monto=$1 WHERE alumno_id=$2 AND estado='PENDIENTE' AND concepto NOT ILIKE '%MATRÍCULA%'`, [b.pension_base, id]);
         res.json({ success: true, data: r.rows[0] });
-    } catch (e) { 
-        res.status(500).json({ success: false, error: e.message }); 
-    }
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // ==========================================
@@ -73,9 +74,7 @@ app.get('/caja/estado-cuenta', async (req, res) => {
     try {
         const r = await pool.query(`SELECT a.id, a.dni, a.nombres, a.apellidos, a.grado, a.seccion, COALESCE(a.papa_celular, a.mama_celular, '') as celular_contacto, COALESCE(json_agg(p.* ORDER BY p.fecha_vencimiento ASC) FILTER (WHERE p.id IS NOT NULL), '[]') as recibos FROM alumnos a LEFT JOIN pensiones p ON a.id=p.alumno_id GROUP BY a.id ORDER BY a.grado, a.seccion, a.apellidos;`);
         res.json({ success: true, data: r.rows });
-    } catch (e) { 
-        res.status(500).json({ success: false, error: e.message }); 
-    }
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.put('/pensiones/:id/pagar', async (req, res) => {
@@ -83,9 +82,7 @@ app.put('/pensiones/:id/pagar', async (req, res) => {
     try { 
         const r = await pool.query(`UPDATE pensiones SET estado='PAGADO', monto=$1, metodo_pago=$2, nro_operacion=$3, fecha_pago=$4 WHERE id=$5 RETURNING *;`, [monto_final, metodo_pago, nro_operacion, fecha_pago, id]); 
         res.json({ success: true, data: r.rows[0] }); 
-    } catch (e) { 
-        res.status(500).json({ success: false, error: e.message }); 
-    }
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // ==========================================
@@ -95,9 +92,7 @@ app.get('/productos', async (req, res) => {
     try { 
         const r = await pool.query('SELECT * FROM productos ORDER BY categoria ASC, nombre ASC'); 
         res.json({ success: true, data: r.rows }); 
-    } catch (e) { 
-        res.status(500).json({ success: false, error: e.message }); 
-    }
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.post('/productos', async (req, res) => {
@@ -105,9 +100,7 @@ app.post('/productos', async (req, res) => {
     try { 
         const r = await pool.query(`INSERT INTO productos (categoria, nombre, precio, stock, tipo) VALUES ($1, $2, $3, $4, $5) RETURNING *`, [b.categoria.toUpperCase(), b.nombre, b.precio, b.stock, b.tipo]); 
         res.json({ success: true, data: r.rows[0] }); 
-    } catch (e) { 
-        res.status(500).json({ success: false, error: e.message }); 
-    }
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.put('/productos/:id', async (req, res) => {
@@ -115,9 +108,7 @@ app.put('/productos/:id', async (req, res) => {
     try { 
         const r = await pool.query(`UPDATE productos SET categoria=$1, nombre=$2, precio=$3, stock=$4, tipo=$5 WHERE id=$6 RETURNING *`, [b.categoria.toUpperCase(), b.nombre, b.precio, b.stock, b.tipo, id]); 
         res.json({ success: true, data: r.rows[0] }); 
-    } catch (e) { 
-        res.status(500).json({ success: false, error: e.message }); 
-    }
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.post('/ventas', async (req, res) => {
@@ -126,34 +117,25 @@ app.post('/ventas', async (req, res) => {
         await c.query('BEGIN');
         for (let i of b.carrito) { 
             const p = await c.query('SELECT stock, nombre, tipo FROM productos WHERE id=$1 FOR UPDATE', [i.id]); 
-            if (p.rows[0].tipo==='FISICO' && p.rows[0].stock < i.cantidad) {
-                throw new Error(`Stock insuficiente: ${p.rows[0].nombre}.`); 
-            }
+            if (p.rows[0].tipo==='FISICO' && p.rows[0].stock < i.cantidad) throw new Error(`Stock insuficiente: ${p.rows[0].nombre}.`); 
         }
         const rV = await c.query(`INSERT INTO ventas (alumno_id, comprador_dni, comprador_nombre, comprador_celular, total, metodo_pago, nro_operacion) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id, fecha_venta`, [b.alumno_id || null, b.comprador_dni||'', b.comprador_nombre||'', b.comprador_celular||'', b.total, b.metodo_pago, b.nro_operacion]);
         for (let i of b.carrito) {
             await c.query(`INSERT INTO ventas_detalle (venta_id, producto_id, nombre_producto, cantidad, precio_unitario, precio_original, motivo_descuento, subtotal) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, [rV.rows[0].id, i.id, i.nombre, i.cantidad, i.precio, i.precio_original, i.motivo_descuento||'', i.cantidad*i.precio]);
-            if (i.tipo==='FISICO') {
-                await c.query('UPDATE productos SET stock = stock - $1 WHERE id=$2', [i.cantidad, i.id]);
-            }
+            if (i.tipo==='FISICO') await c.query('UPDATE productos SET stock = stock - $1 WHERE id=$2', [i.cantidad, i.id]);
         }
         await c.query('COMMIT'); 
         res.json({ success: true, venta_id: rV.rows[0].id, fecha_venta: rV.rows[0].fecha_venta });
     } catch (e) { 
-        await c.query('ROLLBACK'); 
-        res.status(400).json({ success: false, error: e.message }); 
-    } finally { 
-        c.release(); 
-    }
+        await c.query('ROLLBACK'); res.status(400).json({ success: false, error: e.message }); 
+    } finally { c.release(); }
 });
 
 app.get('/ventas/resumen', async (req, res) => {
     try { 
         const r = await pool.query(`SELECT v.*, a.nombres as a_nom, a.apellidos as a_ape, a.grado, a.seccion, COALESCE(a.papa_celular, a.mama_celular, '') as a_cel, (SELECT json_agg(vd.*) FROM ventas_detalle vd WHERE vd.venta_id=v.id) as detalles FROM ventas v LEFT JOIN alumnos a ON v.alumno_id=a.id ORDER BY v.fecha_venta DESC;`); 
         res.json({ success: true, data: r.rows }); 
-    } catch (e) { 
-        res.status(500).json({ success: false, error: e.message }); 
-    }
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.put('/ventas/cambio', async (req, res) => {
@@ -161,19 +143,14 @@ app.put('/ventas/cambio', async (req, res) => {
     try {
         await c.query('BEGIN');
         const pN = await c.query('SELECT stock, nombre, tipo FROM productos WHERE id=$1 FOR UPDATE', [producto_entregado_id]);
-        if (pN.rows[0].tipo==='FISICO' && pN.rows[0].stock < cantidad) {
-            throw new Error(`Stock insuficiente: ${pN.rows[0].nombre}`);
-        }
+        if (pN.rows[0].tipo==='FISICO' && pN.rows[0].stock < cantidad) throw new Error(`Stock insuficiente: ${pN.rows[0].nombre}`);
         await c.query('UPDATE productos SET stock = stock + $1 WHERE id=$2 AND tipo=\'FISICO\'', [cantidad, producto_devuelto_id]);
         await c.query('UPDATE productos SET stock = stock - $1 WHERE id=$2 AND tipo=\'FISICO\'', [cantidad, producto_entregado_id]);
         await c.query('COMMIT'); 
         res.json({ success: true });
     } catch (e) { 
-        await c.query('ROLLBACK'); 
-        res.status(400).json({ success: false, error: e.message }); 
-    } finally { 
-        c.release(); 
-    }
+        await c.query('ROLLBACK'); res.status(400).json({ success: false, error: e.message }); 
+    } finally { c.release(); }
 });
 
 // ==========================================
@@ -208,12 +185,8 @@ app.post('/planillas/generar', async (req, res) => {
         await c.query('BEGIN');
         let plan = await c.query('SELECT * FROM planillas WHERE periodo=$1', [periodo]); 
         let planillaId;
-        if (plan.rows.length > 0) { 
-            planillaId = plan.rows[0].id; 
-        } else { 
-            const ins = await c.query('INSERT INTO planillas (periodo) VALUES ($1) RETURNING id', [periodo]); 
-            planillaId = ins.rows[0].id; 
-        }
+        if (plan.rows.length > 0) { planillaId = plan.rows[0].id; } 
+        else { const ins = await c.query('INSERT INTO planillas (periodo) VALUES ($1) RETURNING id', [periodo]); planillaId = ins.rows[0].id; }
         
         const activos = await c.query("SELECT * FROM personal WHERE estado='ACTIVO'");
         for (let p of activos.rows) {
@@ -222,16 +195,13 @@ app.post('/planillas/generar', async (req, res) => {
                 let descLey = 0; 
                 if (p.tipo_seguro === 'ONP') descLey = parseFloat(p.sueldo_base) * 0.13; 
                 else if (p.tipo_seguro === 'AFP') descLey = parseFloat(p.sueldo_base) * 0.11;
-                
                 let neto = parseFloat(p.sueldo_base) - descLey;
                 await c.query(`INSERT INTO planilla_detalles (planilla_id, personal_id, sueldo_bruto, descuento_ley, sueldo_neto) VALUES ($1, $2, $3, $4, $5)`, [planillaId, p.id, p.sueldo_base, descLey, neto]);
             }
         }
         await c.query('COMMIT'); 
         res.json({ success: true });
-    } catch (e) { 
-        await c.query('ROLLBACK'); res.status(500).json({ success: false, error: e.message }); 
-    } finally { c.release(); }
+    } catch (e) { await c.query('ROLLBACK'); res.status(500).json({ success: false, error: e.message }); } finally { c.release(); }
 });
 
 app.get('/planillas/:periodo', async (req, res) => { 
@@ -254,25 +224,18 @@ app.post('/planillas/pagar-todo', async (req, res) => {
         await c.query('BEGIN'); 
         const plan = await c.query(`UPDATE planillas SET estado='PAGADO' WHERE periodo=$1 RETURNING id`, [periodo]); 
         if (plan.rows.length === 0) throw new Error('Planilla no encontrada'); 
-        
         const pId = plan.rows[0].id; 
         const sum = await c.query(`SELECT SUM(sueldo_neto) as total FROM planilla_detalles WHERE planilla_id=$1`, [pId]); 
-        
         await c.query(`UPDATE planillas SET total_pagado=$1 WHERE id=$2`, [sum.rows[0].total, pId]); 
         await c.query(`UPDATE planilla_detalles SET estado_pago='PAGADO', fecha_pago=NOW() WHERE planilla_id=$1`, [pId]); 
         await c.query('COMMIT'); 
         res.json({ success: true }); 
-    } catch (e) { 
-        await c.query('ROLLBACK'); res.status(500).json({ success: false, error: e.message }); 
-    } finally { c.release(); } 
+    } catch (e) { await c.query('ROLLBACK'); res.status(500).json({ success: false, error: e.message }); } finally { c.release(); } 
 });
 
 app.put('/planillas/pagar-uno/:id_detalle', async (req, res) => { 
     const { id_detalle } = req.params; 
-    try { 
-        await pool.query(`UPDATE planilla_detalles SET estado_pago='PAGADO', fecha_pago=NOW() WHERE id=$1`, [id_detalle]); 
-        res.json({ success: true }); 
-    } catch (e) { res.status(500).json({ success: false, error: e.message }); } 
+    try { await pool.query(`UPDATE planilla_detalles SET estado_pago='PAGADO', fecha_pago=NOW() WHERE id=$1`, [id_detalle]); res.json({ success: true }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } 
 });
 
 // ==========================================
@@ -292,18 +255,12 @@ app.post('/login', async (req, res) => {
 });
 
 app.get('/usuarios', async (req, res) => {
-    try { 
-        const r = await pool.query("SELECT id, nombre_completo, usuario, rol, estado FROM usuarios ORDER BY id ASC"); 
-        res.json({ success: true, data: r.rows }); 
-    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    try { const r = await pool.query("SELECT id, nombre_completo, usuario, rol, estado FROM usuarios ORDER BY id ASC"); res.json({ success: true, data: r.rows }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.post('/usuarios', async (req, res) => {
     const b = req.body;
-    try { 
-        const r = await pool.query(`INSERT INTO usuarios (nombre_completo, usuario, password, rol, estado) VALUES ($1, $2, $3, $4, $5) RETURNING id, nombre_completo, usuario, rol, estado`, [b.nombre_completo.toUpperCase(), b.usuario, b.password, b.rol, b.estado]); 
-        res.json({ success: true, data: r.rows[0] }); 
-    } catch (e) { res.status(500).json({ success: false, error: 'El nombre de usuario ya existe o hay un error.' }); }
+    try { const r = await pool.query(`INSERT INTO usuarios (nombre_completo, usuario, password, rol, estado) VALUES ($1, $2, $3, $4, $5) RETURNING id, nombre_completo, usuario, rol, estado`, [b.nombre_completo.toUpperCase(), b.usuario, b.password, b.rol, b.estado]); res.json({ success: true, data: r.rows[0] }); } catch (e) { res.status(500).json({ success: false, error: 'El nombre de usuario ya existe o hay un error.' }); }
 });
 
 app.put('/usuarios/:id', async (req, res) => {
@@ -311,7 +268,6 @@ app.put('/usuarios/:id', async (req, res) => {
     try { 
         let query = 'UPDATE usuarios SET nombre_completo=$1, usuario=$2, rol=$3, estado=$4 WHERE id=$5 RETURNING id, nombre_completo, usuario, rol, estado';
         let params = [b.nombre_completo.toUpperCase(), b.usuario, b.rol, b.estado, id];
-        
         if (b.password && b.password.trim() !== '') {
             query = 'UPDATE usuarios SET nombre_completo=$1, usuario=$2, password=$3, rol=$4, estado=$5 WHERE id=$6 RETURNING id, nombre_completo, usuario, rol, estado';
             params = [b.nombre_completo.toUpperCase(), b.usuario, b.password, b.rol, b.estado, id];
@@ -327,23 +283,19 @@ app.put('/usuarios/:id', async (req, res) => {
 app.get('/caja-diaria/resumen', async (req, res) => {
     const { desde, hasta } = req.query;
     try {
-        // 🔥 MAGIA DE ZONA HORARIA: Restamos 5 horas a la base de datos (UTC)
-        // para que empate exactito con la hora de Perú, evitando que ventas de noche
-        // salten al día siguiente en el reporte.
         const [pensiones, ventas, egresos, detPensiones, detVentas, detEgresos] = await Promise.all([
-            
             pool.query(`SELECT COALESCE(SUM(monto), 0) as total FROM pensiones WHERE estado='PAGADO' AND fecha_pago >= $1 AND fecha_pago <= $2`, [desde, hasta]),
             
-            // Ajuste -5 Horas para sumatorias de Tienda
-            pool.query(`SELECT COALESCE(SUM(total), 0) as total FROM ventas WHERE (fecha_venta - INTERVAL '5 hours')::date >= $1 AND (fecha_venta - INTERVAL '5 hours')::date <= $2`, [desde, hasta]),
+            // Usamos ::date para forzar a que extraiga el día según la hora local de Perú configurada arriba
+            pool.query(`SELECT COALESCE(SUM(total), 0) as total FROM ventas WHERE fecha_venta::date >= $1 AND fecha_venta::date <= $2`, [desde, hasta]),
             
             pool.query(`SELECT COALESCE(SUM(monto), 0) as total FROM egresos WHERE fecha >= $1 AND fecha <= $2`, [desde, hasta]),
             
-            // Consultas Detalladas
+            // Listas detalladas
             pool.query(`SELECT p.id, p.monto, p.concepto, p.fecha_pago, a.nombres, a.apellidos FROM pensiones p JOIN alumnos a ON p.alumno_id = a.id WHERE p.estado='PAGADO' AND p.fecha_pago >= $1 AND p.fecha_pago <= $2 ORDER BY p.fecha_pago DESC`, [desde, hasta]),
             
-            // Ajuste -5 Horas para lista detallada de Tienda
-            pool.query(`SELECT id, total, fecha_venta, comprador_nombre FROM ventas WHERE (fecha_venta - INTERVAL '5 hours')::date >= $1 AND (fecha_venta - INTERVAL '5 hours')::date <= $2 ORDER BY fecha_venta DESC`, [desde, hasta]),
+            // Lista detallada de la tienda usando ::date
+            pool.query(`SELECT id, total, fecha_venta, comprador_nombre FROM ventas WHERE fecha_venta::date >= $1 AND fecha_venta::date <= $2 ORDER BY fecha_venta DESC`, [desde, hasta]),
             
             pool.query(`SELECT id, monto, concepto, fecha, registrado_por FROM egresos WHERE fecha >= $1 AND fecha <= $2 ORDER BY fecha DESC`, [desde, hasta])
         ]);
