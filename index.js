@@ -1,10 +1,14 @@
 const express = require('express');
 const cors = require('cors');
-const { Pool, types } = require('pg');
+const { Pool, types } = require('pg'); // <-- Importamos 'types' para blindar las fechas
 require('dotenv').config();
 
 // 🛡️ BLINDAJE GLOBAL DE ZONA HORARIA (PERÚ) 🛡️
 process.env.TZ = 'America/Lima'; 
+
+// OID 1082 es para los campos DATE en Postgres (como las pensiones).
+// Esto le dice a Node: "No traduzcas las fechas, devuélvelas como texto exacto (YYYY-MM-DD)".
+// Esto soluciona de raíz que te reste un día.
 types.setTypeParser(1082, (val) => val);
 
 const app = express();
@@ -22,7 +26,10 @@ const pool = new Pool({
     ssl: { rejectUnauthorized: false }
 });
 
-pool.on('connect', client => { client.query("SET timezone = 'America/Lima';"); });
+// Cada vez que el servidor se conecte, obliga a la base de datos a usar la hora peruana
+pool.on('connect', client => {
+    client.query("SET timezone = 'America/Lima';");
+});
 
 pool.connect((err, client, release) => {
     if (err) console.error('❌ Error conectando a Supabase:', err.message);
@@ -82,17 +89,26 @@ app.put('/pensiones/:id/pagar', async (req, res) => {
 // 3. VENTAS E INVENTARIO
 // ==========================================
 app.get('/productos', async (req, res) => {
-    try { const r = await pool.query('SELECT * FROM productos ORDER BY categoria ASC, nombre ASC'); res.json({ success: true, data: r.rows }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    try { 
+        const r = await pool.query('SELECT * FROM productos ORDER BY categoria ASC, nombre ASC'); 
+        res.json({ success: true, data: r.rows }); 
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.post('/productos', async (req, res) => {
     const b = req.body; 
-    try { const r = await pool.query(`INSERT INTO productos (categoria, nombre, precio, stock, tipo) VALUES ($1, $2, $3, $4, $5) RETURNING *`, [b.categoria.toUpperCase(), b.nombre, b.precio, b.stock, b.tipo]); res.json({ success: true, data: r.rows[0] }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    try { 
+        const r = await pool.query(`INSERT INTO productos (categoria, nombre, precio, stock, tipo) VALUES ($1, $2, $3, $4, $5) RETURNING *`, [b.categoria.toUpperCase(), b.nombre, b.precio, b.stock, b.tipo]); 
+        res.json({ success: true, data: r.rows[0] }); 
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.put('/productos/:id', async (req, res) => {
     const { id } = req.params; const b = req.body; 
-    try { const r = await pool.query(`UPDATE productos SET categoria=$1, nombre=$2, precio=$3, stock=$4, tipo=$5 WHERE id=$6 RETURNING *`, [b.categoria.toUpperCase(), b.nombre, b.precio, b.stock, b.tipo, id]); res.json({ success: true, data: r.rows[0] }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    try { 
+        const r = await pool.query(`UPDATE productos SET categoria=$1, nombre=$2, precio=$3, stock=$4, tipo=$5 WHERE id=$6 RETURNING *`, [b.categoria.toUpperCase(), b.nombre, b.precio, b.stock, b.tipo, id]); 
+        res.json({ success: true, data: r.rows[0] }); 
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.post('/ventas', async (req, res) => {
@@ -110,11 +126,16 @@ app.post('/ventas', async (req, res) => {
         }
         await c.query('COMMIT'); 
         res.json({ success: true, venta_id: rV.rows[0].id, fecha_venta: rV.rows[0].fecha_venta });
-    } catch (e) { await c.query('ROLLBACK'); res.status(400).json({ success: false, error: e.message }); } finally { c.release(); }
+    } catch (e) { 
+        await c.query('ROLLBACK'); res.status(400).json({ success: false, error: e.message }); 
+    } finally { c.release(); }
 });
 
 app.get('/ventas/resumen', async (req, res) => {
-    try { const r = await pool.query(`SELECT v.*, a.nombres as a_nom, a.apellidos as a_ape, a.grado, a.seccion, COALESCE(a.papa_celular, a.mama_celular, '') as a_cel, (SELECT json_agg(vd.*) FROM ventas_detalle vd WHERE vd.venta_id=v.id) as detalles FROM ventas v LEFT JOIN alumnos a ON v.alumno_id=a.id ORDER BY v.fecha_venta DESC;`); res.json({ success: true, data: r.rows }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    try { 
+        const r = await pool.query(`SELECT v.*, a.nombres as a_nom, a.apellidos as a_ape, a.grado, a.seccion, COALESCE(a.papa_celular, a.mama_celular, '') as a_cel, (SELECT json_agg(vd.*) FROM ventas_detalle vd WHERE vd.venta_id=v.id) as detalles FROM ventas v LEFT JOIN alumnos a ON v.alumno_id=a.id ORDER BY v.fecha_venta DESC;`); 
+        res.json({ success: true, data: r.rows }); 
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.put('/ventas/cambio', async (req, res) => {
@@ -125,8 +146,11 @@ app.put('/ventas/cambio', async (req, res) => {
         if (pN.rows[0].tipo==='FISICO' && pN.rows[0].stock < cantidad) throw new Error(`Stock insuficiente: ${pN.rows[0].nombre}`);
         await c.query('UPDATE productos SET stock = stock + $1 WHERE id=$2 AND tipo=\'FISICO\'', [cantidad, producto_devuelto_id]);
         await c.query('UPDATE productos SET stock = stock - $1 WHERE id=$2 AND tipo=\'FISICO\'', [cantidad, producto_entregado_id]);
-        await c.query('COMMIT'); res.json({ success: true });
-    } catch (e) { await c.query('ROLLBACK'); res.status(400).json({ success: false, error: e.message }); } finally { c.release(); }
+        await c.query('COMMIT'); 
+        res.json({ success: true });
+    } catch (e) { 
+        await c.query('ROLLBACK'); res.status(400).json({ success: false, error: e.message }); 
+    } finally { c.release(); }
 });
 
 // ==========================================
@@ -138,7 +162,7 @@ app.get('/personal', async (req, res) => {
 
 app.post('/personal', async (req, res) => { 
     const b = req.body; 
-    try { const r = await pool.query(`INSERT INTO personal (dni, nombres, apellidos, cargo, sueldo_base, tipo_seguro, estado) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`, [b.dni, b.nombres.toUpperCase(), b.apellidos.toUpperCase(), b.cargo.toUpperCase(), b.sueldo_base, b.tipo_seguro, b.estado]); res.json({ success: true, data: r.rows[0] }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } 
+    try { const r = await pool.query(`INSERT INTO personal (dni, nombres, apellidos, cargo, sueldo_base, tipo_seguro) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`, [b.dni, b.nombres.toUpperCase(), b.apellidos.toUpperCase(), b.cargo.toUpperCase(), b.sueldo_base, b.tipo_seguro]); res.json({ success: true, data: r.rows[0] }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } 
 });
 
 app.put('/personal/:id', async (req, res) => { 
@@ -152,46 +176,7 @@ app.get('/gastos', async (req, res) => {
 
 app.post('/gastos', async (req, res) => { 
     const b = req.body; 
-    try { const r = await pool.query(`INSERT INTO gastos (categoria, descripcion, monto, nro_comprobante, registrado_por) VALUES ($1, $2, $3, $4, $5) RETURNING *`, [b.categoria, b.descripcion, b.monto, b.nro_comprobante, b.registrado_por || 'Admin']); res.json({ success: true, data: r.rows[0] }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } 
-});
-
-// NUEVO: SISTEMA DE ADELANTOS DE SUELDO (Se integra con Planillas y Caja)
-app.post('/planillas/adelanto', async (req, res) => {
-    const { id_detalle, monto_adelanto, registrado_por } = req.body;
-    const c = await pool.connect();
-    try {
-        await c.query('BEGIN');
-        
-        // 1. Ubicar a la persona y su planilla
-        const det = await c.query('SELECT pd.*, p.nombres, p.apellidos FROM planilla_detalles pd JOIN personal p ON pd.personal_id = p.id WHERE pd.id = $1', [id_detalle]);
-        if(det.rows.length === 0) throw new Error('No se encontró el detalle de la planilla.');
-        const row = det.rows[0];
-        
-        // 2. Validar que no pida más de lo que va a ganar
-        if (parseFloat(monto_adelanto) > parseFloat(row.sueldo_neto)) {
-            throw new Error('El monto del adelanto supera el sueldo neto disponible a pagar.');
-        }
-        
-        // 3. Modificar Planilla (Sumar a descuentos extra el adelanto)
-        const nuevosDescuentos = parseFloat(row.descuentos_extra) + parseFloat(monto_adelanto);
-        const motivoPrevio = row.motivo_ajuste ? row.motivo_ajuste + ' | ' : '';
-        const nuevoMotivo = `${motivoPrevio}Adelanto Caja: S/ ${parseFloat(monto_adelanto).toFixed(2)}`;
-        const nuevoNeto = parseFloat(row.sueldo_bruto) - parseFloat(row.descuento_ley) + parseFloat(row.bonos) - nuevosDescuentos;
-        
-        await c.query(`UPDATE planilla_detalles SET descuentos_extra=$1, motivo_ajuste=$2, sueldo_neto=$3 WHERE id=$4`, [nuevosDescuentos, nuevoMotivo, nuevoNeto, id_detalle]);
-        
-        // 4. Modificar CAJA DIARIA (Registrar la salida física del billete como Egreso)
-        // Usamos CURRENT_DATE porque la DB ya está seteada en America/Lima
-        await c.query(`INSERT INTO egresos (concepto, monto, fecha, comprobante, registrado_por) VALUES ($1, $2, CURRENT_DATE, $3, $4)`, 
-            [`Adelanto de Sueldo: ${row.apellidos} ${row.nombres}`, monto_adelanto, 'VOUCHER ADELANTO', registrado_por || 'Tesorería']);
-        
-        await c.query('COMMIT');
-        
-        res.json({ success: true, data: { nombres: row.nombres, apellidos: row.apellidos, monto: monto_adelanto } });
-    } catch (e) { 
-        await c.query('ROLLBACK'); 
-        res.status(400).json({ success: false, error: e.message }); 
-    } finally { c.release(); }
+    try { const r = await pool.query(`INSERT INTO gastos (categoria, descripcion, monto, nro_comprobante) VALUES ($1, $2, $3, $4) RETURNING *`, [b.categoria, b.descripcion, b.monto, b.nro_comprobante]); res.json({ success: true, data: r.rows[0] }); } catch (e) { res.status(500).json({ success: false, error: e.message }); } 
 });
 
 app.post('/planillas/generar', async (req, res) => {
@@ -203,7 +188,6 @@ app.post('/planillas/generar', async (req, res) => {
         if (plan.rows.length > 0) { planillaId = plan.rows[0].id; } 
         else { const ins = await c.query('INSERT INTO planillas (periodo) VALUES ($1) RETURNING id', [periodo]); planillaId = ins.rows[0].id; }
         
-        // FILTRO DE ORO: Solo trae a los profes que están ACTIVOS. Si renunció, no se le genera boleta.
         const activos = await c.query("SELECT * FROM personal WHERE estado='ACTIVO'");
         for (let p of activos.rows) {
             const existe = await c.query('SELECT id FROM planilla_detalles WHERE planilla_id=$1 AND personal_id=$2', [planillaId, p.id]);
@@ -301,10 +285,18 @@ app.get('/caja-diaria/resumen', async (req, res) => {
     try {
         const [pensiones, ventas, egresos, detPensiones, detVentas, detEgresos] = await Promise.all([
             pool.query(`SELECT COALESCE(SUM(monto), 0) as total FROM pensiones WHERE estado='PAGADO' AND fecha_pago >= $1 AND fecha_pago <= $2`, [desde, hasta]),
-            pool.query(`SELECT COALESCE(SUM(total), 0) as total FROM ventas WHERE (fecha_venta - INTERVAL '5 hours')::date >= $1 AND (fecha_venta - INTERVAL '5 hours')::date <= $2`, [desde, hasta]),
+            
+            // Usamos ::date para forzar a que extraiga el día según la hora local de Perú configurada arriba
+            pool.query(`SELECT COALESCE(SUM(total), 0) as total FROM ventas WHERE fecha_venta::date >= $1 AND fecha_venta::date <= $2`, [desde, hasta]),
+            
             pool.query(`SELECT COALESCE(SUM(monto), 0) as total FROM egresos WHERE fecha >= $1 AND fecha <= $2`, [desde, hasta]),
+            
+            // Listas detalladas
             pool.query(`SELECT p.id, p.monto, p.concepto, p.fecha_pago, a.nombres, a.apellidos FROM pensiones p JOIN alumnos a ON p.alumno_id = a.id WHERE p.estado='PAGADO' AND p.fecha_pago >= $1 AND p.fecha_pago <= $2 ORDER BY p.fecha_pago DESC`, [desde, hasta]),
-            pool.query(`SELECT id, total, fecha_venta, comprador_nombre FROM ventas WHERE (fecha_venta - INTERVAL '5 hours')::date >= $1 AND (fecha_venta - INTERVAL '5 hours')::date <= $2 ORDER BY fecha_venta DESC`, [desde, hasta]),
+            
+            // Lista detallada de la tienda usando ::date
+            pool.query(`SELECT id, total, fecha_venta, comprador_nombre FROM ventas WHERE fecha_venta::date >= $1 AND fecha_venta::date <= $2 ORDER BY fecha_venta DESC`, [desde, hasta]),
+            
             pool.query(`SELECT id, monto, concepto, fecha, registrado_por FROM egresos WHERE fecha >= $1 AND fecha <= $2 ORDER BY fecha DESC`, [desde, hasta])
         ]);
         
@@ -315,31 +307,52 @@ app.get('/caja-diaria/resumen', async (req, res) => {
         res.json({ 
             success: true, 
             data: { 
-                ingresos_pensiones: parseFloat(pensiones.rows[0].total), ingresos_tienda: parseFloat(ventas.rows[0].total), 
-                total_ingresos: totalIngresos, total_egresos: totalEgresos, saldo_efectivo: saldo,
-                lista_pensiones: detPensiones.rows, lista_ventas: detVentas.rows, lista_egresos: detEgresos.rows      
+                ingresos_pensiones: parseFloat(pensiones.rows[0].total), 
+                ingresos_tienda: parseFloat(ventas.rows[0].total), 
+                total_ingresos: totalIngresos, 
+                total_egresos: totalEgresos, 
+                saldo_efectivo: saldo,
+                lista_pensiones: detPensiones.rows, 
+                lista_ventas: detVentas.rows,       
+                lista_egresos: detEgresos.rows      
             }
         });
-    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    } catch (e) { 
+        res.status(500).json({ success: false, error: e.message }); 
+    }
 });
 
 app.post('/egresos', async (req, res) => {
     const b = req.body;
-    try { const r = await pool.query(`INSERT INTO egresos (concepto, monto, fecha, comprobante, registrado_por) VALUES ($1, $2, $3, $4, $5) RETURNING *`, [b.concepto, b.monto, b.fecha, b.comprobante, b.registrado_por]); res.json({ success: true, data: r.rows[0] }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    try {
+        const r = await pool.query(`INSERT INTO egresos (concepto, monto, fecha, comprobante, registrado_por) VALUES ($1, $2, $3, $4, $5) RETURNING *`, [b.concepto, b.monto, b.fecha, b.comprobante, b.registrado_por]);
+        res.json({ success: true, data: r.rows[0] });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.get('/egresos', async (req, res) => {
     const { desde, hasta } = req.query;
-    try { const r = await pool.query(`SELECT * FROM egresos WHERE fecha >= $1 AND fecha <= $2 ORDER BY fecha DESC, id DESC`, [desde, hasta]); res.json({ success: true, data: r.rows }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    try {
+        const r = await pool.query(`SELECT * FROM egresos WHERE fecha >= $1 AND fecha <= $2 ORDER BY fecha DESC, id DESC`, [desde, hasta]);
+        res.json({ success: true, data: r.rows });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.post('/cierres-caja', async (req, res) => {
     const b = req.body;
-    try { const r = await pool.query(`INSERT INTO cierres_caja (fecha_inicio, fecha_fin, total_ingresos, total_egresos, saldo_efectivo, entregado_a, firma_digital) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`, [b.fecha_inicio, b.fecha_fin, b.total_ingresos, b.total_egresos, b.saldo_efectivo, b.entregado_a, b.firma_digital]); res.json({ success: true, data: r.rows[0] }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    try {
+        const r = await pool.query(`INSERT INTO cierres_caja (fecha_inicio, fecha_fin, total_ingresos, total_egresos, saldo_efectivo, entregado_a, firma_digital) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`, [b.fecha_inicio, b.fecha_fin, b.total_ingresos, b.total_egresos, b.saldo_efectivo, b.entregado_a, b.firma_digital]);
+        res.json({ success: true, data: r.rows[0] });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 app.get('/cierres-caja', async (req, res) => {
-    try { const r = await pool.query(`SELECT * FROM cierres_caja ORDER BY fecha_cierre DESC`); res.json({ success: true, data: r.rows }); } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    try {
+        const r = await pool.query(`SELECT * FROM cierres_caja ORDER BY fecha_cierre DESC`);
+        res.json({ success: true, data: r.rows });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-app.listen(PORT, () => { console.log(`🚀 Servidor ERP encendido en el puerto ${PORT}...`); });
+app.listen(PORT, () => {
+    console.log(`🚀 Servidor ERP encendido y esperando conexiones en el puerto ${PORT}...`);
+});
